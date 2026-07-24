@@ -1,0 +1,12 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+devotify.db
+
+venv/
+
+indexer_state.json
+
+__pycache__/
