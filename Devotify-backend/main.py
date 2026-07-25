@@ -3,14 +3,15 @@ import json
 import sqlite3
 import secrets
 from pathlib import Path
-from fastapi.middleware.cors import CORSMiddleware
+
+import bcrypt
 from dotenv import load_dotenv
 from web3 import Web3
 from eth_abi import encode
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from relayer import register_voter_by_id, vote_by_id
-
 
 load_dotenv()
 
@@ -19,8 +20,6 @@ DB_PATH = BASE_DIR / "devotify.db"
 ABI_PATH = BASE_DIR / "devotify_voting_abi.json"
 
 # --- Set up the chain connection and contract ONCE, at startup ---
-# Previously this was being recreated on every single request, which is wasteful.
-
 RPC_URL = os.getenv("SEPOLIA_RPC_URL")
 CONTRACT_ADDRESS = os.getenv("DEVOTIFY_VOTING_ADDRESS")
 
@@ -39,6 +38,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- Shared helpers ---
 
 def get_db_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -65,6 +67,73 @@ def get_event_options(event_id: int) -> list:
             break
     return options
 
+
+def get_or_create_event_salt(event_id: int) -> str:
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT salt FROM event_salts WHERE event_id = ?", (event_id,))
+        row = cursor.fetchone()
+        if row:
+            return row["salt"]
+        salt = secrets.token_hex(16)
+        cursor.execute("INSERT INTO event_salts (event_id, salt) VALUES (?, ?)", (event_id, salt))
+        conn.commit()
+        return salt
+    finally:
+        conn.close()
+
+
+# --- Table setup ---
+
+def init_eligibility_tables():
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS event_salts (
+                event_id INTEGER PRIMARY KEY,
+                salt TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS eligible_voters (
+                event_id INTEGER,
+                identity_key TEXT,
+                voter_id TEXT,
+                used INTEGER DEFAULT 0,
+                PRIMARY KEY (event_id, identity_key)
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_credential_table():
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS credential_voters (
+                event_id INTEGER,
+                identity_key TEXT,
+                password_hash TEXT,
+                voter_id TEXT,
+                used INTEGER DEFAULT 0,
+                PRIMARY KEY (event_id, identity_key)
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+init_eligibility_tables()
+init_credential_table()
+
+
+# --- Basic read endpoints ---
 
 @app.get("/")
 def read_root() -> dict:
@@ -182,51 +251,10 @@ def verify_event_results(event_id: int) -> dict:
     }
 
 
-def init_eligibility_tables():
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS event_salts (
-                event_id INTEGER PRIMARY KEY,
-                salt TEXT
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS eligible_voters (
-                event_id INTEGER,
-                identity_key TEXT,
-                voter_id TEXT,
-                used INTEGER DEFAULT 0,
-                PRIMARY KEY (event_id, identity_key)
-            )
-        """)
-        conn.commit()
-    finally:
-        conn.close()
-
-
-init_eligibility_tables()
-
+# --- Eligibility system (identity key only, self-service registration) ---
 
 class EligibleVotersRequest(BaseModel):
     identity_keys: list[str]
-
-
-def get_or_create_event_salt(event_id: int) -> str:
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT salt FROM event_salts WHERE event_id = ?", (event_id,))
-        row = cursor.fetchone()
-        if row:
-            return row["salt"]
-        salt = secrets.token_hex(16)
-        cursor.execute("INSERT INTO event_salts (event_id, salt) VALUES (?, ?)", (event_id, salt))
-        conn.commit()
-        return salt
-    finally:
-        conn.close()
 
 
 @app.post("/events/{event_id}/eligible-voters")
@@ -249,9 +277,9 @@ def add_eligible_voters(event_id: int, body: EligibleVotersRequest) -> dict:
     return {"event_id": event_id, "added": added, "total_submitted": len(body.identity_keys)}
 
 
-
 class RegisterByIdRequest(BaseModel):
     identity_key: str
+
 
 @app.post("/events/{event_id}/register-by-id")
 def register_by_id(event_id: int, body: RegisterByIdRequest) -> dict:
@@ -289,6 +317,7 @@ def register_by_id(event_id: int, body: RegisterByIdRequest) -> dict:
         conn.close()
     return {"status": "registered", "event_id": event_id, "tx_hash": result["tx_hash"]}
 
+
 class VoteByIdRequest(BaseModel):
     identity_key: str
     option_index: int
@@ -317,4 +346,103 @@ def submit_vote_by_id(event_id: int, body: VoteByIdRequest) -> dict:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"On-chain vote failed: {str(e)}")
 
+    return {"status": "voted", "event_id": event_id, "option_index": body.option_index, "tx_hash": result["tx_hash"]}
+
+
+# --- Credential system (identity key + password, combined authenticate-and-vote) ---
+
+class VoterCredential(BaseModel):
+    identity_key: str
+    password: str
+
+
+class CredentialVotersRequest(BaseModel):
+    credentials: list[VoterCredential]
+
+
+@app.post("/events/{event_id}/credential-voters")
+def add_credential_voters(event_id: int, body: CredentialVotersRequest) -> dict:
+    salt = get_or_create_event_salt(event_id)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        added = 0
+        newly_added_voter_ids = []
+
+        for cred in body.credentials:
+            voter_id_hex = Web3.keccak(text=f"{cred.identity_key}:{salt}").hex()
+            password_hash = bcrypt.hashpw(cred.password.encode(), bcrypt.gensalt()).decode()
+
+            cursor.execute(
+                "INSERT OR IGNORE INTO credential_voters (event_id, identity_key, password_hash, voter_id, used) VALUES (?, ?, ?, ?, 0)",
+                (event_id, cred.identity_key, password_hash, voter_id_hex),
+            )
+
+            if cursor.rowcount > 0:
+                added += 1
+                newly_added_voter_ids.append(voter_id_hex)
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Register each newly added voter on-chain immediately, right now, while
+    # the registration window is guaranteed to still be open (we're inside
+    # event creation/setup). Voters never have to register themselves later.
+    registration_errors = []
+    for voter_id_hex in newly_added_voter_ids:
+        voter_id_bytes = bytes.fromhex(
+            voter_id_hex[2:] if voter_id_hex.startswith("0x") else voter_id_hex
+        )
+        try:
+            register_voter_by_id(event_id, voter_id_bytes)
+        except Exception as e:
+            registration_errors.append(str(e))
+
+    return {
+        "event_id": event_id,
+        "added": added,
+        "total_submitted": len(body.credentials),
+        "registration_errors": registration_errors,
+    }
+
+
+class AuthenticateAndVoteRequest(BaseModel):
+    identity_key: str
+    password: str
+    option_index: int
+
+
+@app.post("/events/{event_id}/authenticate-and-vote")
+def authenticate_and_vote(event_id: int, body: AuthenticateAndVoteRequest) -> dict:
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT password_hash, voter_id FROM credential_voters WHERE event_id = ? AND identity_key = ?",
+            (event_id, body.identity_key),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such voter for this event")
+        if not bcrypt.checkpw(body.password.encode(), row["password_hash"].encode()):
+            raise HTTPException(status_code=401, detail="Incorrect password")
+        voter_id_hex = row["voter_id"]
+    finally:
+        conn.close()
+    voter_id_bytes = bytes.fromhex(voter_id_hex[2:] if voter_id_hex.startswith("0x") else voter_id_hex)
+    try:
+        result = vote_by_id(event_id, body.option_index, voter_id_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"On-chain vote failed: {str(e)}")
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE credential_voters SET used = 1 WHERE event_id = ? AND identity_key = ?",
+            (event_id, body.identity_key),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return {"status": "voted", "event_id": event_id, "option_index": body.option_index, "tx_hash": result["tx_hash"]}
