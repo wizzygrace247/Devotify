@@ -8,6 +8,10 @@ import { DVY_ADDRESS, DEVOTIFY_VOTING_ADDRESS } from "../contracts";
 
 type RegistrationMode = "open" | "id" | "credential";
 
+const inputClass =
+  "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30";
+const labelClass = "mb-1 block text-sm font-semibold text-ink";
+
 function CreateEvent() {
   const navigate = useNavigate();
   const { isConnected } = useAccount();
@@ -23,6 +27,8 @@ function CreateEvent() {
   const [registrationMode, setRegistrationMode] = useState<RegistrationMode>("open");
   const [eligibleVotersText, setEligibleVotersText] = useState("");
   const [credentialPairsText, setCredentialPairsText] = useState("");
+
+  const isError = /error|failed|enter|connect/i.test(status);
 
   const updateOption = (index: number, value: string) => {
     const next = [...options];
@@ -79,8 +85,8 @@ function CreateEvent() {
       if (registrationMode === "id") {
         const identityKeys = eligibleVotersText
           .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0);
+          .map((l) => l.trim())
+          .filter(Boolean);
 
         if (identityKeys.length > 0) {
           setStatus("Adding eligible voters...");
@@ -99,8 +105,8 @@ function CreateEvent() {
       } else if (registrationMode === "credential") {
         const credentials = credentialPairsText
           .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
+          .map((l) => l.trim())
+          .filter(Boolean)
           .map((line) => {
             const [identity_key, password] = line.split(",").map((s) => s.trim());
             return { identity_key, password };
@@ -108,11 +114,14 @@ function CreateEvent() {
 
         if (credentials.length > 0) {
           setStatus("Adding voter credentials...");
-          const res = await fetch(`http://127.0.0.1:8000/events/${newEventId}/credential-voters`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ credentials }),
-          });
+          const res = await fetch(
+            `http://127.0.0.1:8000/events/${newEventId}/credential-voters`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ credentials }),
+            }
+          );
 
           if (!res.ok) {
             setStatus("Election created, but adding credentials failed. You can add them later.");
@@ -130,113 +139,168 @@ function CreateEvent() {
     }
   };
 
+  const modeOptions: { value: RegistrationMode; title: string; description: string }[] = [
+    {
+      value: "open",
+      title: "Open",
+      description: "Anyone with a wallet can register",
+    },
+    {
+      value: "id",
+      title: "ID-based",
+      description: "Voters self-register with an identity key you provide, no wallet needed",
+    },
+    {
+      value: "credential",
+      title: "Credential-based",
+      description:
+        "Voters skip registration; they log in with an ID + password you set and vote in one step",
+    },
+  ];
+
   return (
-    <div>
-      <h1>Create Election</h1>
+    <div className="max-w-2xl">
+      <h1 className="mb-6 text-2xl font-extrabold text-ink">Create Election</h1>
 
-      <label>
-        Topic
-        <input value={topic} onChange={(e) => setTopic(e.target.value)} />
-      </label>
-
-      <h3>Options</h3>
-      {options.map((option, index) => (
-        <input
-          key={index}
-          value={option}
-          onChange={(e) => updateOption(index, e.target.value)}
-          placeholder={`Option ${index + 1}`}
-        />
-      ))}
-      <button type="button" onClick={addOption}>
-        + Add option
-      </button>
-
-      <label>
-        Registration window (minutes from now)
-        <input
-          type="number"
-          value={registrationMinutes}
-          onChange={(e) => setRegistrationMinutes(Number(e.target.value))}
-        />
-      </label>
-
-      <label>
-        Voting window (minutes after registration closes)
-        <input
-          type="number"
-          value={votingMinutes}
-          onChange={(e) => setVotingMinutes(Number(e.target.value))}
-        />
-      </label>
-
-      <label>
-        Deposit amount (DVY)
-        <input
-          type="number"
-          value={depositAmount}
-          onChange={(e) => setDepositAmount(Number(e.target.value))}
-        />
-      </label>
-
-      <h3>How will people participate?</h3>
-
-      <label style={{ display: "block" }}>
-        <input
-          type="radio"
-          checked={registrationMode === "open"}
-          onChange={() => setRegistrationMode("open")}
-        />
-        Open — anyone with a wallet can register
-      </label>
-
-      <label style={{ display: "block" }}>
-        <input
-          type="radio"
-          checked={registrationMode === "id"}
-          onChange={() => setRegistrationMode("id")}
-        />
-        ID-based — voters self-register with an identity key you provide, no wallet needed
-      </label>
-
-      <label style={{ display: "block" }}>
-        <input
-          type="radio"
-          checked={registrationMode === "credential"}
-          onChange={() => setRegistrationMode("credential")}
-        />
-        Credential-based — voters skip registration; they log in with an ID + password you set and vote in one step
-      </label>
-
-      {registrationMode === "id" && (
-        <label>
-          Eligible voter identity keys (one per line)
-          <textarea
-            value={eligibleVotersText}
-            onChange={(e) => setEligibleVotersText(e.target.value)}
-            rows={5}
-            placeholder={"student-12345\nstudent-67890"}
+      <div className="space-y-6 rounded-xl border border-border bg-surface p-6 shadow-sm">
+        <div>
+          <label className={labelClass}>Topic</label>
+          <input
+            className={inputClass}
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            placeholder="e.g. Best programming language"
           />
-        </label>
-      )}
+        </div>
 
-      {registrationMode === "credential" && (
-        <label>
-          Voter credentials — one per line, as identity_key,password
-          <textarea
-            value={credentialPairsText}
-            onChange={(e) => setCredentialPairsText(e.target.value)}
-            rows={5}
-            placeholder={"student-12345,correcthorse1\nstudent-67890,correcthorse2"}
+        <div>
+          <label className={labelClass}>Options</label>
+          <div className="space-y-2">
+            {options.map((option, index) => (
+              <input
+                key={index}
+                className={inputClass}
+                value={option}
+                onChange={(e) => updateOption(index, e.target.value)}
+                placeholder={`Option ${index + 1}`}
+              />
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={addOption}
+            className="mt-2 text-sm font-semibold text-primary hover:text-primary-bright"
+          >
+            + Add option
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Registration window (minutes)</label>
+            <input
+              type="number"
+              className={inputClass}
+              value={registrationMinutes}
+              onChange={(e) => setRegistrationMinutes(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Voting window (minutes after)</label>
+            <input
+              type="number"
+              className={inputClass}
+              value={votingMinutes}
+              onChange={(e) => setVotingMinutes(Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className={labelClass}>Deposit amount (DVY)</label>
+          <input
+            type="number"
+            className={inputClass}
+            value={depositAmount}
+            onChange={(e) => setDepositAmount(Number(e.target.value))}
           />
-        </label>
-      )}
+        </div>
 
-      <button type="button" onClick={handleSubmit}>
-        Create Election
-      </button>
+        <div>
+          <label className={labelClass}>How will people participate?</label>
+          <div className="space-y-2">
+            {modeOptions.map((opt) => (
+              <label
+                key={opt.value}
+                className={`block cursor-pointer rounded-lg border p-3 transition ${
+                  registrationMode === opt.value
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:border-primary/40"
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="radio"
+                    className="mt-1 h-4 w-4 accent-primary"
+                    checked={registrationMode === opt.value}
+                    onChange={() => setRegistrationMode(opt.value)}
+                  />
+                  <div>
+                    <p className="font-semibold text-ink">{opt.title}</p>
+                    <p className="text-sm text-ink/60">{opt.description}</p>
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
 
-      {status && <p>{status}</p>}
+        {registrationMode === "id" && (
+          <div>
+            <label className={labelClass}>Eligible voter identity keys (one per line)</label>
+            <textarea
+              className={inputClass}
+              value={eligibleVotersText}
+              onChange={(e) => setEligibleVotersText(e.target.value)}
+              rows={4}
+              placeholder={"student-12345\nstudent-67890"}
+            />
+          </div>
+        )}
+
+        {registrationMode === "credential" && (
+          <div>
+            <label className={labelClass}>
+              Voter credentials — one per line, as identity_key,password
+            </label>
+            <textarea
+              className={inputClass}
+              value={credentialPairsText}
+              onChange={(e) => setCredentialPairsText(e.target.value)}
+              rows={4}
+              placeholder={"student-12345,correcthorse1\nstudent-67890,correcthorse2"}
+            />
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={handleSubmit}
+          className="w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-bright"
+        >
+          Create Election
+        </button>
+
+        {status && (
+          <p
+            className={`rounded-lg px-4 py-3 text-sm ${
+              isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
+            }`}
+          >
+            {status}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
