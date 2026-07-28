@@ -36,7 +36,9 @@ contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), a
 app = FastAPI(title="Devotify Backend")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173",],
+    allow_origins=["http://localhost:5173",
+                   "https://https://devotify.vercel.app",],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
