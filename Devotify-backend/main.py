@@ -3,7 +3,7 @@ import json
 import sqlite3
 import secrets
 from pathlib import Path
-
+from indexer_task import start_indexer_thread
 import bcrypt
 from dotenv import load_dotenv
 from web3 import Web3
@@ -16,7 +16,8 @@ from relayer import register_voter_by_id, vote_by_id
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "devotify.db"
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR))
+DB_PATH = DATA_DIR / "devotify.db"
 ABI_PATH = BASE_DIR / "devotify_voting_abi.json"
 
 # --- Set up the chain connection and contract ONCE, at startup ---
@@ -30,6 +31,7 @@ with open(ABI_PATH) as f:
 abi = abi_data["abi"] if isinstance(abi_data, dict) else abi_data
 
 contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=abi)
+
 
 app = FastAPI(title="Devotify Backend")
 app.add_middleware(
@@ -107,9 +109,8 @@ def init_eligibility_tables():
         """)
         conn.commit()
     finally:
-        conn.close()
-
-
+        conn.close()     
+        
 def init_credential_table():
     conn = get_db_connection()
     try:
@@ -131,7 +132,7 @@ def init_credential_table():
 
 init_eligibility_tables()
 init_credential_table()
-
+start_indexer_thread(w3, contract, get_db_connection)
 
 # --- Basic read endpoints ---
 

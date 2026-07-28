@@ -32,9 +32,29 @@ function getStatus(event: VotingEvent): { label: string; className: string } {
   return { label: "Voting closed", className: "bg-border text-ink/60" };
 }
 
+function EventCard({ event }: { event: VotingEvent }) {
+  const status = getStatus(event);
+
+  return (
+    <Link
+      to={`/events/${event.event_id}`}
+      className="rounded-xl border border-border bg-surface p-5 shadow-sm transition hover:border-primary/40 hover:shadow-md"
+    >
+      <span
+        className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${status.className}`}
+      >
+        {status.label}
+      </span>
+      <h2 className="mt-3 text-lg font-bold text-ink">{event.topic}</h2>
+      <p className="mt-1 truncate font-mono text-xs text-ink/50">{event.creator}</p>
+    </Link>
+  );
+}
+
 function Dashboard() {
   const [events, setEvents] = useState<VotingEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showPast, setShowPast] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/events`)
@@ -49,9 +69,11 @@ function Dashboard() {
       });
   }, []);
 
-  if (loading) {
-    return <p className="text-ink/60">Loading elections...</p>;
-  }
+  if (loading) return <p className="text-ink/60">Loading elections...</p>;
+
+  const now = Math.floor(Date.now() / 1000);
+  const activeEvents = events.filter((e) => now <= e.voting_deadline);
+  const pastEvents = events.filter((e) => now > e.voting_deadline);
 
   return (
     <div>
@@ -68,28 +90,42 @@ function Dashboard() {
       {events.length === 0 ? (
         <p className="text-ink/60">No elections yet. Be the first to create one.</p>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {events.map((event) => {
-            const status = getStatus(event);
-            return (
-              <Link
-                key={event.event_id}
-                to={`/events/${event.event_id}`}
-                className="rounded-xl border border-border bg-surface p-5 shadow-sm transition hover:border-primary/40 hover:shadow-md"
+        <>
+          {activeEvents.length > 0 ? (
+            <div className="mb-4 grid gap-4 sm:grid-cols-2">
+              {activeEvents.map((event) => (
+                <EventCard key={event.event_id} event={event} />
+              ))}
+            </div>
+          ) : (
+            <p className="mb-4 text-sm text-ink/60">No active elections right now.</p>
+          )}
+
+          {pastEvents.length > 0 && (
+            <div className="mt-8">
+              <button
+                type="button"
+                onClick={() => setShowPast(!showPast)}
+                className="flex items-center gap-2 text-sm font-semibold text-ink/70 hover:text-ink"
               >
                 <span
-                  className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${status.className}`}
+                  className={`inline-block transition-transform ${showPast ? "rotate-90" : ""}`}
                 >
-                  {status.label}
+                  ▸
                 </span>
-                <h2 className="mt-3 text-lg font-bold text-ink">{event.topic}</h2>
-                <p className="mt-1 truncate font-mono text-xs text-ink/50">
-                  {event.creator}
-                </p>
-              </Link>
-            );
-          })}
-        </div>
+                Past elections ({pastEvents.length})
+              </button>
+
+              {showPast && (
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  {pastEvents.map((event) => (
+                    <EventCard key={event.event_id} event={event} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
