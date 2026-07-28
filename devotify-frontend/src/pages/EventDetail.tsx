@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import devotifyVotingAbi from "../abis/DevotifyVoting.json";
 import { DEVOTIFY_VOTING_ADDRESS } from "../contracts";
+import { API_BASE_URL } from "../config";
 
 interface EventDetails {
   event_id: number;
@@ -28,9 +29,8 @@ function statusBanner(message: string) {
   const isError = /error|failed|enter|connect/i.test(message);
   return (
     <p
-      className={`mt-3 rounded-lg px-4 py-3 text-sm ${
-        isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
-      }`}
+      className={`mt-3 rounded-lg px-4 py-3 text-sm ${isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
+        }`}
     >
       {message}
     </p>
@@ -64,7 +64,7 @@ function EventDetail() {
   useEffect(() => {
     const loadEvent = async () => {
       try {
-        const res = await fetch(`http://127.0.0.1:8000/events/${eventId}`);
+        const res = await fetch(`${API_BASE_URL}/events/${eventId}`);
         setEvent(await res.json());
       } catch (err) {
         console.error("Failed to fetch event:", err);
@@ -75,7 +75,7 @@ function EventDetail() {
 
     const loadRegistrationMode = async () => {
       try {
-        const res = await fetch(`http://127.0.0.1:8000/events/${eventId}/registration-mode`);
+        const res = await fetch(`${API_BASE_URL}/events/${eventId}/registration-mode`);
         const data = await res.json();
         setRegistrationMode(data.mode);
       } catch (err) {
@@ -89,12 +89,12 @@ function EventDetail() {
 
   useEffect(() => {
     if (event?.results_revealed) {
-      fetch(`http://127.0.0.1:8000/events/${eventId}/results`)
+      fetch(`${API_BASE_URL}/events/${eventId}/results`)
         .then((res) => res.json())
         .then((data) => setResults(data.results))
         .catch((err) => console.error("Failed to fetch results:", err));
 
-      fetch(`http://127.0.0.1:8000/events/${eventId}/verify`)
+      fetch(`${API_BASE_URL}/events/${eventId}/verify`)
         .then((res) => res.json())
         .then((data) => setVerifyData(data))
         .catch((err) => console.error("Failed to fetch verification:", err));
@@ -123,7 +123,7 @@ function EventDetail() {
     if (!identityKey.trim()) return setRegisterStatus("Enter your identity key.");
     try {
       setRegisterStatus("Registering...");
-      const res = await fetch(`http://127.0.0.1:8000/events/${eventId}/register-by-id`, {
+      const res = await fetch(`${API_BASE_URL}/events/${eventId}/register-by-id`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identity_key: identityKey }),
@@ -159,7 +159,7 @@ function EventDetail() {
     if (!voteIdentityKey.trim()) return setVoteStatus("Enter your identity key.");
     try {
       setVoteStatus("Voting...");
-      const res = await fetch(`http://127.0.0.1:8000/events/${eventId}/vote-by-id`, {
+      const res = await fetch(`${API_BASE_URL}/events/${eventId}/vote-by-id`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -182,18 +182,15 @@ function EventDetail() {
     }
     try {
       setVoteStatus("Logging in and voting...");
-      const res = await fetch(
-        `http://127.0.0.1:8000/events/${eventId}/authenticate-and-vote`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            identity_key: loginIdentityKey,
-            password: loginPassword,
-            option_index: selectedOption,
-          }),
-        }
-      );
+      const res = await fetch(`${API_BASE_URL}/events/${eventId}/authenticate-and-vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identity_key: loginIdentityKey,
+          password: loginPassword,
+          option_index: selectedOption,
+        }),
+      });
       const data = await res.json();
       if (!res.ok) return setVoteStatus(`Error: ${data.detail}`);
       setVoteStatus("Vote cast successfully!");
@@ -217,7 +214,7 @@ function EventDetail() {
       });
       await publicClient!.waitForTransactionReceipt({ hash });
       setRevealStatus("Results revealed!");
-      const res = await fetch(`http://127.0.0.1:8000/events/${eventId}`);
+      const res = await fetch(`${API_BASE_URL}/events/${eventId}`);
       setEvent(await res.json());
     } catch (err) {
       console.error(err);
@@ -258,15 +255,11 @@ function EventDetail() {
 
       <div className="my-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-lg border border-border bg-surface p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">
-            Registered
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">Registered</p>
           <p className="mt-1 text-xl font-bold text-ink">{event.registration_count}</p>
         </div>
         <div className="rounded-lg border border-border bg-surface p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">
-            Votes cast
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">Votes cast</p>
           <p className="mt-1 text-xl font-bold text-ink">{event.vote_count}</p>
         </div>
         <div className="rounded-lg border border-border bg-surface p-4">
@@ -278,9 +271,7 @@ function EventDetail() {
           </p>
         </div>
         <div className="rounded-lg border border-border bg-surface p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">
-            Voting closes
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">Voting closes</p>
           <p className="mt-1 text-sm font-semibold text-ink">
             {new Date(event.voting_deadline * 1000).toLocaleString()}
           </p>
@@ -326,11 +317,10 @@ function EventDetail() {
             {event.options.map((option, index) => (
               <label
                 key={index}
-                className={`block cursor-pointer rounded-lg border p-3 transition ${
-                  selectedOption === index
+                className={`block cursor-pointer rounded-lg border p-3 transition ${selectedOption === index
                     ? "border-primary bg-primary/5"
                     : "border-border hover:border-primary/40"
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   <input
@@ -380,11 +370,10 @@ function EventDetail() {
             {event.options.map((option, index) => (
               <label
                 key={index}
-                className={`block cursor-pointer rounded-lg border p-3 transition ${
-                  selectedOption === index
+                className={`block cursor-pointer rounded-lg border p-3 transition ${selectedOption === index
                     ? "border-primary bg-primary/5"
                     : "border-border hover:border-primary/40"
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   <input
@@ -447,11 +436,10 @@ function EventDetail() {
 
           {verifyData && (
             <div
-              className={`mb-5 flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-semibold ${
-                verifyData.verified
+              className={`mb-5 flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-semibold ${verifyData.verified
                   ? "bg-primary/10 text-primary"
                   : "bg-danger/10 text-danger"
-              }`}
+                }`}
             >
               <span>{verifyData.verified ? "✓" : "✗"}</span>
               {verifyData.verified

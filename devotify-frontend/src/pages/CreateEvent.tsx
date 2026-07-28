@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAccount, useWriteContract, usePublicClient } from "wagmi";
-import { parseUnits } from "viem";
+import { useAccount, useWriteContract, usePublicClient, useReadContract } from "wagmi";
+import { parseUnits, formatUnits } from "viem";
 import dvyAbi from "../abis/DVY.json";
 import devotifyVotingAbi from "../abis/DevotifyVoting.json";
-import { DVY_ADDRESS, DEVOTIFY_VOTING_ADDRESS } from "../contracts";
+import faucetAbi from "../abis/Faucet.json";
+import { DVY_ADDRESS, DEVOTIFY_VOTING_ADDRESS, FAUCET_ADDRESS } from "../contracts";
+import { API_BASE_URL } from "../config";
 
 type RegistrationMode = "open" | "id" | "credential";
 
@@ -14,7 +16,7 @@ const labelClass = "mb-1 block text-sm font-semibold text-ink";
 
 function CreateEvent() {
   const navigate = useNavigate();
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
 
@@ -27,6 +29,15 @@ function CreateEvent() {
   const [registrationMode, setRegistrationMode] = useState<RegistrationMode>("open");
   const [eligibleVotersText, setEligibleVotersText] = useState("");
   const [credentialPairsText, setCredentialPairsText] = useState("");
+  const [faucetStatus, setFaucetStatus] = useState("");
+
+  const { data: dvyBalance, refetch: refetchBalance } = useReadContract({
+    address: DVY_ADDRESS as `0x${string}`,
+    abi: dvyAbi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    query: { enabled: !!address },
+  });
 
   const isError = /error|failed|enter|connect/i.test(status);
 
@@ -37,6 +48,27 @@ function CreateEvent() {
   };
 
   const addOption = () => setOptions([...options, ""]);
+
+  const handleClaimFaucet = async () => {
+    if (!isConnected) {
+      setFaucetStatus("Connect your wallet first.");
+      return;
+    }
+    try {
+      setFaucetStatus("Claiming...");
+      const hash = await writeContractAsync({
+        address: FAUCET_ADDRESS as `0x${string}`,
+        abi: faucetAbi,
+        functionName: "claim",
+      });
+      await publicClient!.waitForTransactionReceipt({ hash });
+      setFaucetStatus("Claimed 100 DVY!");
+      refetchBalance();
+    } catch (err) {
+      console.error(err);
+      setFaucetStatus("Claim failed — you may need to wait for the 24-hour cooldown.");
+    }
+  };
 
   const handleSubmit = async () => {
     if (!isConnected) {
@@ -90,7 +122,7 @@ function CreateEvent() {
 
         if (identityKeys.length > 0) {
           setStatus("Adding eligible voters...");
-          const res = await fetch(`http://127.0.0.1:8000/events/${newEventId}/eligible-voters`, {
+          const res = await fetch(`${API_BASE_URL}/events/${newEventId}/eligible-voters`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ identity_keys: identityKeys }),
@@ -114,14 +146,11 @@ function CreateEvent() {
 
         if (credentials.length > 0) {
           setStatus("Adding voter credentials...");
-          const res = await fetch(
-            `http://127.0.0.1:8000/events/${newEventId}/credential-voters`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ credentials }),
-            }
-          );
+          const res = await fetch(`${API_BASE_URL}/events/${newEventId}/credential-voters`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ credentials }),
+          });
 
           if (!res.ok) {
             setStatus("Election created, but adding credentials failed. You can add them later.");
@@ -161,6 +190,25 @@ function CreateEvent() {
   return (
     <div className="max-w-2xl">
       <h1 className="mb-6 text-2xl font-extrabold text-ink">Create Election</h1>
+
+      <div className="mb-6 flex items-center justify-between rounded-xl border border-border bg-surface p-4 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold text-ink">Need DVY to create an election?</p>
+          <p className="text-xs text-ink/60">
+            {dvyBalance !== undefined
+              ? `Your balance: ${formatUnits(dvyBalance as bigint, 18)} DVY`
+              : "Connect your wallet to check your balance"}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleClaimFaucet}
+          className="whitespace-nowrap rounded-lg border border-primary px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/5"
+        >
+          Get test tokens
+        </button>
+      </div>
+      {faucetStatus && <p className="mb-4 text-sm text-ink/60">{faucetStatus}</p>}
 
       <div className="space-y-6 rounded-xl border border-border bg-surface p-6 shadow-sm">
         <div>
