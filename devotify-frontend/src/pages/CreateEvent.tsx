@@ -28,7 +28,7 @@ function CreateEvent() {
   const [status, setStatus] = useState("");
   const [registrationMode, setRegistrationMode] = useState<RegistrationMode>("open");
   const [eligibleVotersText, setEligibleVotersText] = useState("");
-  const [credentialPairsText, setCredentialPairsText] = useState("");
+  const [credentialPairs, setCredentialPairs] = useState([{ identityKey: "", password: "" }]);
   const [faucetStatus, setFaucetStatus] = useState("");
 
   const { data: dvyBalance, refetch: refetchBalance } = useReadContract({
@@ -48,6 +48,23 @@ function CreateEvent() {
   };
 
   const addOption = () => setOptions([...options, ""]);
+
+  const updateCredentialPair = (
+    index: number,
+    field: "identityKey" | "password",
+    value: string,
+  ) => {
+    const next = [...credentialPairs];
+    next[index] = { ...next[index], [field]: value };
+    setCredentialPairs(next);
+  };
+
+  const addCredentialPair = () =>
+    setCredentialPairs([...credentialPairs, { identityKey: "", password: "" }]);
+
+  const removeCredentialPair = (index: number) => {
+    setCredentialPairs(credentialPairs.filter((_, i) => i !== index));
+  };
 
   const handleClaimFaucet = async () => {
     if (!isConnected) {
@@ -135,14 +152,12 @@ function CreateEvent() {
           }
         }
       } else if (registrationMode === "credential") {
-        const credentials = credentialPairsText
-          .split("\n")
-          .map((l) => l.trim())
-          .filter(Boolean)
-          .map((line) => {
-            const [identity_key, password] = line.split(",").map((s) => s.trim());
-            return { identity_key, password };
-          });
+        const credentials = credentialPairs
+          .filter((p) => p.identityKey.trim() && p.password)
+          .map((p) => ({
+            identity_key: p.identityKey.trim(),
+            password: p.password,
+          }));
 
         if (credentials.length > 0) {
           setStatus("Adding voter credentials...");
@@ -280,11 +295,10 @@ function CreateEvent() {
             {modeOptions.map((opt) => (
               <label
                 key={opt.value}
-                className={`block cursor-pointer rounded-lg border p-3 transition ${
-                  registrationMode === opt.value
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/40"
-                }`}
+                className={`block cursor-pointer rounded-lg border p-3 transition ${registrationMode === opt.value
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:border-primary/40"
+                  }`}
               >
                 <div className="flex items-start gap-3">
                   <input
@@ -318,16 +332,46 @@ function CreateEvent() {
 
         {registrationMode === "credential" && (
           <div>
-            <label className={labelClass}>
-              Voter credentials — one per line, as identity_key,password
-            </label>
-            <textarea
-              className={inputClass}
-              value={credentialPairsText}
-              onChange={(e) => setCredentialPairsText(e.target.value)}
-              rows={4}
-              placeholder={"student-12345,correcthorse1\nstudent-67890,correcthorse2"}
-            />
+            <label className={labelClass}>Voter credentials</label>
+            <div className="mb-1 flex gap-2 px-1 text-xs font-semibold text-ink/50">
+              <span className="flex-1">Identity key</span>
+              <span className="flex-1">Password</span>
+            </div>
+            <div className="space-y-2">
+              {credentialPairs.map((pair, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <input
+                    className={inputClass}
+                    value={pair.identityKey}
+                    onChange={(e) => updateCredentialPair(index, "identityKey", e.target.value)}
+                    placeholder="e.g. student-12345"
+                  />
+                  <input
+                    className={inputClass}
+                    value={pair.password}
+                    onChange={(e) => updateCredentialPair(index, "password", e.target.value)}
+                    placeholder="e.g. correcthorse1"
+                  />
+                  {credentialPairs.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeCredentialPair(index)}
+                      className="px-2 text-lg text-ink/40 transition-colors hover:text-danger"
+                      aria-label="Remove"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addCredentialPair}
+              className="mt-2 text-sm font-semibold text-primary hover:text-primary-bright"
+            >
+              + Add voter
+            </button>
           </div>
         )}
 
@@ -341,9 +385,8 @@ function CreateEvent() {
 
         {status && (
           <p
-            className={`rounded-lg px-4 py-3 text-sm ${
-              isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
-            }`}
+            className={`rounded-lg px-4 py-3 text-sm ${isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
+              }`}
           >
             {status}
           </p>
