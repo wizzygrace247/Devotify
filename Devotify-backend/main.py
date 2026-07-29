@@ -449,3 +449,25 @@ def authenticate_and_vote(event_id: int, body: AuthenticateAndVoteRequest) -> di
     finally:
         conn.close()
     return {"status": "voted", "event_id": event_id, "option_index": body.option_index, "tx_hash": result["tx_hash"]}
+
+@app.get("/events/{event_id}/registration-mode")
+def get_registration_mode(event_id: int) -> dict:
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as count FROM credential_voters WHERE event_id = ?", (event_id,))
+        has_credentials = cursor.fetchone()["count"] > 0
+
+        cursor.execute("SELECT COUNT(*) as count FROM eligible_voters WHERE event_id = ?", (event_id,))
+        has_eligible = cursor.fetchone()["count"] > 0
+    finally:
+        conn.close()
+
+    if has_credentials:
+        mode = "credential"
+    elif has_eligible:
+        mode = "id"
+    else:
+        mode = "open"
+
+    return {"event_id": event_id, "mode": mode}
