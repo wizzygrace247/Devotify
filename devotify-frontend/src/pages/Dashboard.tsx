@@ -72,9 +72,8 @@ function Dashboard() {
   if (loading) return <p className="text-ink/60">Loading elections...</p>;
 
   const now = Math.floor(Date.now() / 1000);
-  const activeEvents = events.filter((e) => now <= e.voting_deadline);
-  const pastEvents = events.filter((e) => now > e.voting_deadline);
-
+  const activeEvents = events.filter((e) => now <= e.voting_deadline).sort((a, b) => b.event_id - a.event_id); 
+  const pastEvents = events.filter((e) => now > e.voting_deadline).sort((a, b) => b.event_id - a.event_id);
   return (
     <div>
       <div className="mb-8 flex items-center justify-between">
