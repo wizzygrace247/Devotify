@@ -33,7 +33,7 @@ function CreateEvent() {
 
   const { data: dvyBalance, refetch: refetchBalance } = useReadContract({
     address: DVY_ADDRESS as `0x${string}`,
-    abi: dvyAbi,
+    abi: dvyAbi as any,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
     query: { enabled: !!address },
@@ -75,7 +75,7 @@ function CreateEvent() {
       setFaucetStatus("Claiming...");
       const hash = await writeContractAsync({
         address: FAUCET_ADDRESS as `0x${string}`,
-        abi: faucetAbi,
+        abi: faucetAbi as any,
         functionName: "claim",
       });
       await publicClient!.waitForTransactionReceipt({ hash });
@@ -108,7 +108,7 @@ function CreateEvent() {
       setStatus("Approving deposit...");
       const approveHash = await writeContractAsync({
         address: DVY_ADDRESS as `0x${string}`,
-        abi: dvyAbi,
+        abi: dvyAbi as any,
         functionName: "approve",
         args: [DEVOTIFY_VOTING_ADDRESS, depositAmountWei],
       });
@@ -117,7 +117,7 @@ function CreateEvent() {
       setStatus("Creating event...");
       const createHash = await writeContractAsync({
         address: DEVOTIFY_VOTING_ADDRESS as `0x${string}`,
-        abi: devotifyVotingAbi,
+        abi: devotifyVotingAbi as any,
         functionName: "createEvent",
         args: [topic, filledOptions, registrationDeadline, votingDeadline, depositAmountWei],
       });
@@ -125,7 +125,7 @@ function CreateEvent() {
 
       const eventCount = (await publicClient!.readContract({
         address: DEVOTIFY_VOTING_ADDRESS as `0x${string}`,
-        abi: devotifyVotingAbi,
+        abi: devotifyVotingAbi as any,
         functionName: "eventCount",
       })) as bigint;
 
@@ -141,12 +141,17 @@ function CreateEvent() {
           setStatus("Adding eligible voters...");
           const res = await fetch(`${API_BASE_URL}/events/${newEventId}/eligible-voters`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": import.meta.env.VITE_API_KEY,
+            },
             body: JSON.stringify({ identity_keys: identityKeys }),
           });
 
           if (!res.ok) {
-            setStatus("Election created, but adding eligible voters failed. You can add them later.");
+            setStatus(
+              "Election created, but adding eligible voters failed. You can add them later.",
+            );
             navigate(`/events/${newEventId}`);
             return;
           }
@@ -163,12 +168,17 @@ function CreateEvent() {
           setStatus("Adding voter credentials...");
           const res = await fetch(`${API_BASE_URL}/events/${newEventId}/credential-voters`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": import.meta.env.VITE_API_KEY,
+            },
             body: JSON.stringify({ credentials }),
           });
 
           if (!res.ok) {
-            setStatus("Election created, but adding credentials failed. You can add them later.");
+            setStatus(
+              "Election created, but adding credentials failed. You can add them later.",
+            );
             navigate(`/events/${newEventId}`);
             return;
           }
@@ -295,10 +305,11 @@ function CreateEvent() {
             {modeOptions.map((opt) => (
               <label
                 key={opt.value}
-                className={`block cursor-pointer rounded-lg border p-3 transition ${registrationMode === opt.value
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:border-primary/40"
-                  }`}
+                className={`block cursor-pointer rounded-lg border p-3 transition ${
+                  registrationMode === opt.value
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:border-primary/40"
+                }`}
               >
                 <div className="flex items-start gap-3">
                   <input
@@ -385,8 +396,9 @@ function CreateEvent() {
 
         {status && (
           <p
-            className={`rounded-lg px-4 py-3 text-sm ${isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
-              }`}
+            className={`rounded-lg px-4 py-3 text-sm ${
+              isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
+            }`}
           >
             {status}
           </p>
