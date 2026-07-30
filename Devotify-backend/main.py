@@ -3,7 +3,7 @@ import json
 import sqlite3
 import secrets
 from pathlib import Path
-
+import time
 from indexer_task import start_indexer_thread
 import bcrypt
 from dotenv import load_dotenv
@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from relayer import register_voter_by_id, vote_by_id
-
+from fastapi import FastAPI, HTTPException, Depends, Header
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -443,97 +443,78 @@ def add_credential_voters(event_id: int, body: CredentialVotersRequest) -> dict:
         newly_added_voter_ids = []
 
         for cred in body.credentials:
-            voter_id_hex = Web3.keccak(text=f"{cred.identity_key}:{salt}").hex()
+            identity_key = cred.identity_key.strip()
+            if not identity_key or not cred.password:
+                continue
+
+            voter_id_hex = Web3.keccak(text=f"{identity_key}:{salt}").hex()
             password_hash = bcrypt.hashpw(
                 cred.password.encode(),
                 bcrypt.gensalt(),
             ).decode()
 
             cursor.execute(
-                "INSERT OR IGNORE INTO credential_voters (event_id, identity_key, password_hash, voter_id, used) VALUES (?, ?, ?, ?, 0)",
-                (event_id, cred.identity_key, password_hash, voter_id_hex),
+                """
+                INSERT OR IGNORE INTO credential_voters
+                (event_id, identity_key, password_hash, voter_id, used)
+                VALUES (?, ?, ?, ?, 0)
+                """,
+                (event_id, identity_key, password_hash, voter_id_hex),
             )
 
             if cursor.rowcount > 0:
                 added += 1
-                newly_added_voter_ids.append(voter_id_hex)
+                newly_added_voter_ids.append(
+                    {
+                        "identity_key": identity_key,
+                        "voter_id": voter_id_hex,
+                    }
+                )
 
         conn.commit()
     finally:
         conn.close()
 
-    registration_errors = []
-    for voter_id_hex in newly_added_voter_ids:
+    # Register each new voter on-chain, one by one
+    registration_results = []
+    for item in newly_added_voter_ids:
+        voter_id_hex = item["voter_id"]
         voter_id_bytes = bytes.fromhex(
             voter_id_hex[2:] if voter_id_hex.startswith("0x") else voter_id_hex
         )
+
         try:
-            register_voter_by_id(event_id, voter_id_bytes)
+            result = register_voter_by_id(event_id, voter_id_bytes)
+            registration_results.append(
+                {
+                    "identity_key": item["identity_key"],
+                    "voter_id": voter_id_hex,
+                    "status": "registered",
+                    "tx_hash": result.get("tx_hash"),
+                }
+            )
+            time.sleep(1)  # reduce nonce / RPC pressure
         except Exception as e:
-            registration_errors.append(str(e))
+            registration_results.append(
+                {
+                    "identity_key": item["identity_key"],
+                    "voter_id": voter_id_hex,
+                    "status": "failed",
+                    "error": str(e),
+                }
+            )
+
+    onchain_registered = sum(
+        1 for r in registration_results if r["status"] == "registered"
+    )
 
     return {
         "event_id": event_id,
         "added": added,
         "total_submitted": len(body.credentials),
-        "registration_errors": registration_errors,
+        "onchain_registered": onchain_registered,
+        "registration_results": registration_results,
     }
-
-
-class AuthenticateAndVoteRequest(BaseModel):
-    identity_key: str
-    password: str
-    option_index: int
-
-
-@app.post("/events/{event_id}/authenticate-and-vote")
-def authenticate_and_vote(event_id: int, body: AuthenticateAndVoteRequest) -> dict:
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT password_hash, voter_id FROM credential_voters WHERE event_id = ? AND identity_key = ?",
-            (event_id, body.identity_key),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="No such voter for this event")
-        if not bcrypt.checkpw(body.password.encode(), row["password_hash"].encode()):
-            raise HTTPException(status_code=401, detail="Incorrect password")
-        voter_id_hex = row["voter_id"]
-    finally:
-        conn.close()
-
-    voter_id_bytes = bytes.fromhex(
-        voter_id_hex[2:] if voter_id_hex.startswith("0x") else voter_id_hex
-    )
-
-    try:
-        result = vote_by_id(event_id, body.option_index, voter_id_bytes)
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"On-chain vote failed: {str(e)}",
-        )
-
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE credential_voters SET used = 1 WHERE event_id = ? AND identity_key = ?",
-            (event_id, body.identity_key),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    return {
-        "status": "voted",
-        "event_id": event_id,
-        "option_index": body.option_index,
-        "tx_hash": result["tx_hash"],
-    }
-
 
 @app.get("/events/{event_id}/registration-mode")
 def get_registration_mode(event_id: int) -> dict:
