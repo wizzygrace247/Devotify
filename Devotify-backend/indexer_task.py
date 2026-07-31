@@ -2,10 +2,10 @@ import time
 import threading
 from pathlib import Path
 import json
-BASE_DIR = Path(__file__).resolve().parent
-import os 
+import os
 
-DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)) 
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR))
 STATE_FILE = DATA_DIR / "indexer_state.json"
 CHUNK_SIZE = 9
 POLL_INTERVAL_SECONDS = 20
@@ -49,6 +49,17 @@ def init_indexer_tables(get_db_connection):
                 block_number INTEGER
             )
         """)
+
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_voter_registrations_unique ON voter_registrations(event_id, voter_id)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_unique ON votes(event_id, voter_id)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_results_revealed_unique ON results_revealed(event_id)"
+        )
+
         conn.commit()
     finally:
         conn.close()
@@ -63,12 +74,12 @@ def process_chunk(conn, contract, from_block, to_block):
             print(f"[indexer] [{event_name}] block {log.blockNumber}: {dict(log.args)}")
             if event_name == "VoterRegistered":
                 cursor.execute(
-                    "INSERT INTO voter_registrations (event_id, voter_id, block_number) VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO voter_registrations (event_id, voter_id, block_number) VALUES (?, ?, ?)",
                     (log.args.eventId, log.args.voterId.hex(), log.blockNumber),
                 )
             elif event_name == "VoteCast":
                 cursor.execute(
-                    "INSERT INTO votes (event_id, voter_id, option_index, block_number) VALUES (?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO votes (event_id, voter_id, option_index, block_number) VALUES (?, ?, ?, ?)",
                     (
                         log.args.eventId,
                         log.args.voterId.hex(),
@@ -78,7 +89,7 @@ def process_chunk(conn, contract, from_block, to_block):
                 )
             elif event_name == "ResultsRevealed":
                 cursor.execute(
-                    "INSERT INTO results_revealed (event_id, results_hash, block_number) VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO results_revealed (event_id, results_hash, block_number) VALUES (?, ?, ?)",
                     (log.args.eventId, log.args.resultsHash.hex(), log.blockNumber),
                 )
     conn.commit()
