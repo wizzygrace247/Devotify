@@ -99,6 +99,18 @@ function CreateEvent() {
       return;
     }
 
+    if (registrationMinutes < 1) {
+      setStatus("Registration window must be at least 1 minute.");
+      return;
+    }
+
+    if (registrationMode === "credential" && registrationMinutes < 5) {
+      setStatus(
+        "Credential mode needs at least 5 minutes — the system has to register every voter on-chain automatically before the window closes.",
+      );
+      return;
+    }
+
     try {
       const depositAmountWei = parseUnits(depositAmount.toString(), 18);
       const now = Math.floor(Date.now() / 1000);
@@ -277,6 +289,12 @@ function CreateEvent() {
               value={registrationMinutes}
               onChange={(e) => setRegistrationMinutes(Number(e.target.value))}
             />
+            {registrationMode === "credential" && (
+              <p className="mt-1 text-xs text-ink/50">
+                Needs enough time for every voter&apos;s credential to be registered on-chain
+                automatically — 5+ minutes recommended.
+              </p>
+            )}
           </div>
           <div>
             <label className={labelClass}>Voting window (minutes after)</label>
@@ -305,11 +323,10 @@ function CreateEvent() {
             {modeOptions.map((opt) => (
               <label
                 key={opt.value}
-                className={`block cursor-pointer rounded-lg border p-3 transition ${
-                  registrationMode === opt.value
+                className={`block cursor-pointer rounded-lg border p-3 transition ${registrationMode === opt.value
                     ? "border-primary bg-primary/5"
                     : "border-border hover:border-primary/40"
-                }`}
+                  }`}
               >
                 <div className="flex items-start gap-3">
                   <input
@@ -396,9 +413,8 @@ function CreateEvent() {
 
         {status && (
           <p
-            className={`rounded-lg px-4 py-3 text-sm ${
-              isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
-            }`}
+            className={`rounded-lg px-4 py-3 text-sm ${isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
+              }`}
           >
             {status}
           </p>
