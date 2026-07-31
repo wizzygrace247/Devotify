@@ -26,15 +26,20 @@ const primaryBtn =
   "w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-bright";
 
 function statusBanner(message: string) {
-  const isError = /error|failed|enter|connect/i.test(message);
+  const isError = /error|failed|enter|connect|not found|unauthorized/i.test(message);
   return (
     <p
-      className={`mt-3 rounded-lg px-4 py-3 text-sm ${isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
-        }`}
+      className={`mt-3 rounded-lg px-4 py-3 text-sm ${
+        isError ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
+      }`}
     >
       {message}
     </p>
   );
+}
+
+function getErrorMessage(data: any, status: number, fallback: string) {
+  return data?.detail || data?.message || fallback || `Request failed (${status})`;
 }
 
 function EventDetail() {
@@ -45,6 +50,7 @@ function EventDetail() {
 
   const [event, setEvent] = useState<EventDetails | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [registerStatus, setRegisterStatus] = useState("");
   const [identityKey, setIdentityKey] = useState("");
   const [selectedOption, setSelectedOption] = useState(0);
@@ -55,19 +61,30 @@ function EventDetail() {
   const [loginPassword, setLoginPassword] = useState("");
   const [revealStatus, setRevealStatus] = useState("");
   const [results, setResults] = useState<Record<string, number> | null>(null);
+  const [resultsError, setResultsError] = useState("");
   const [verifyData, setVerifyData] = useState<{
-    verified: boolean;
-    computed_hash: string;
-    onchain_hash: string;
+    verified?: boolean;
+    computed_hash?: string;
+    onchain_hash?: string;
+    reason?: string;
   } | null>(null);
 
   useEffect(() => {
     const loadEvent = async () => {
       try {
+        setLoadError("");
         const res = await fetch(`${API_BASE_URL}/events/${eventId}`);
-        setEvent(await res.json());
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(getErrorMessage(data, res.status, "Event not found"));
+        }
+
+        setEvent(data);
       } catch (err) {
         console.error("Failed to fetch event:", err);
+        setEvent(null);
+        setLoadError(err instanceof Error ? err.message : "Failed to load event");
       } finally {
         setLoading(false);
       }
@@ -76,8 +93,15 @@ function EventDetail() {
     const loadRegistrationMode = async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/events/${eventId}/registration-mode`);
-        const data = await res.json();
-        setRegistrationMode(data.mode);
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(getErrorMessage(data, res.status, "Failed to load registration mode"));
+        }
+
+        if (data.mode === "open" || data.mode === "id" || data.mode === "credential") {
+          setRegistrationMode(data.mode);
+        }
       } catch (err) {
         console.error("Failed to fetch registration mode:", err);
       }
@@ -88,17 +112,44 @@ function EventDetail() {
   }, [eventId]);
 
   useEffect(() => {
-    if (event?.results_revealed) {
-      fetch(`${API_BASE_URL}/events/${eventId}/results`)
-        .then((res) => res.json())
-        .then((data) => setResults(data.results))
-        .catch((err) => console.error("Failed to fetch results:", err));
+    if (!event?.results_revealed) return;
 
-      fetch(`${API_BASE_URL}/events/${eventId}/verify`)
-        .then((res) => res.json())
-        .then((data) => setVerifyData(data))
-        .catch((err) => console.error("Failed to fetch verification:", err));
-    }
+    const loadResults = async () => {
+      try {
+        setResultsError("");
+        const res = await fetch(`${API_BASE_URL}/events/${eventId}/results`);
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(getErrorMessage(data, res.status, "Failed to load results"));
+        }
+
+        setResults(data.results ?? null);
+      } catch (err) {
+        console.error("Failed to fetch results:", err);
+        setResults(null);
+        setResultsError(err instanceof Error ? err.message : "Failed to load results");
+      }
+    };
+
+    const loadVerify = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/events/${eventId}/verify`);
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(getErrorMessage(data, res.status, "Failed to verify results"));
+        }
+
+        setVerifyData(data);
+      } catch (err) {
+        console.error("Failed to fetch verification:", err);
+        setVerifyData(null);
+      }
+    };
+
+    void loadResults();
+    void loadVerify();
   }, [event?.results_revealed, eventId]);
 
   const handleWalletRegister = async () => {
@@ -107,7 +158,7 @@ function EventDetail() {
       setRegisterStatus("Registering...");
       const hash = await writeContractAsync({
         address: DEVOTIFY_VOTING_ADDRESS as `0x${string}`,
-        abi: devotifyVotingAbi,
+        abi: devotifyVotingAbi as any,
         functionName: "registerForEvent",
         args: [BigInt(eventId!)],
       });
@@ -115,7 +166,11 @@ function EventDetail() {
       setRegisterStatus("Registered successfully!");
     } catch (err) {
       console.error(err);
-      setRegisterStatus("Registration failed — see browser console for details.");
+      setRegisterStatus(
+        err instanceof Error
+          ? `Registration failed: ${err.message}`
+          : "Registration failed — see browser console for details.",
+      );
     }
   };
 
@@ -128,12 +183,18 @@ function EventDetail() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identity_key: identityKey }),
       });
-      const data = await res.json();
-      if (!res.ok) return setRegisterStatus(`Error: ${data.detail}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return setRegisterStatus(`Error: ${getErrorMessage(data, res.status, "Registration failed")}`);
+      }
       setRegisterStatus("Registered successfully!");
     } catch (err) {
       console.error(err);
-      setRegisterStatus("Registration failed — see browser console for details.");
+      setRegisterStatus(
+        err instanceof Error
+          ? `Registration failed: ${err.message}`
+          : "Registration failed — see browser console for details.",
+      );
     }
   };
 
@@ -143,7 +204,7 @@ function EventDetail() {
       setVoteStatus("Voting...");
       const hash = await writeContractAsync({
         address: DEVOTIFY_VOTING_ADDRESS as `0x${string}`,
-        abi: devotifyVotingAbi,
+        abi: devotifyVotingAbi as any,
         functionName: "castVote",
         args: [BigInt(eventId!), BigInt(selectedOption)],
       });
@@ -151,7 +212,11 @@ function EventDetail() {
       setVoteStatus("Vote cast successfully!");
     } catch (err) {
       console.error(err);
-      setVoteStatus("Vote failed — see browser console for details.");
+      setVoteStatus(
+        err instanceof Error
+          ? `Vote failed: ${err.message}`
+          : "Vote failed — see browser console for details.",
+      );
     }
   };
 
@@ -167,12 +232,18 @@ function EventDetail() {
           option_index: selectedOption,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) return setVoteStatus(`Error: ${data.detail}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return setVoteStatus(`Error: ${getErrorMessage(data, res.status, "Vote failed")}`);
+      }
       setVoteStatus("Vote cast successfully!");
     } catch (err) {
       console.error(err);
-      setVoteStatus("Vote failed — see browser console for details.");
+      setVoteStatus(
+        err instanceof Error
+          ? `Vote failed: ${err.message}`
+          : "Vote failed — see browser console for details.",
+      );
     }
   };
 
@@ -191,12 +262,18 @@ function EventDetail() {
           option_index: selectedOption,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) return setVoteStatus(`Error: ${data.detail}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return setVoteStatus(`Error: ${getErrorMessage(data, res.status, "Vote failed")}`);
+      }
       setVoteStatus("Vote cast successfully!");
     } catch (err) {
       console.error(err);
-      setVoteStatus("Vote failed — see browser console for details.");
+      setVoteStatus(
+        err instanceof Error
+          ? `Vote failed: ${err.message}`
+          : "Vote failed — see browser console for details.",
+      );
     }
   };
 
@@ -208,24 +285,39 @@ function EventDetail() {
       setRevealStatus("Revealing results...");
       const hash = await writeContractAsync({
         address: DEVOTIFY_VOTING_ADDRESS as `0x${string}`,
-        abi: devotifyVotingAbi,
+        abi: devotifyVotingAbi as any,
         functionName: "revealResults",
         args: [BigInt(eventId!)],
       });
       await publicClient!.waitForTransactionReceipt({ hash });
-      setRevealStatus("Results revealed!");
+      setRevealStatus("Results revealed! Refreshing...");
+
       const res = await fetch(`${API_BASE_URL}/events/${eventId}`);
-      setEvent(await res.json());
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(getErrorMessage(data, res.status, "Failed to refresh event"));
+      }
+      setEvent(data);
+      setRevealStatus("Results revealed!");
     } catch (err) {
       console.error(err);
       setRevealStatus(
-        "Reveal failed — only the event creator can do this, and only after voting closes."
+        err instanceof Error
+          ? `Reveal failed: ${err.message}`
+          : "Reveal failed — only the event creator can do this, and only after voting closes.",
       );
     }
   };
 
   if (loading) return <p className="text-ink/60">Loading...</p>;
-  if (!event) return <p className="text-ink/60">Event not found.</p>;
+  if (!event) {
+    return (
+      <div>
+        <p className="text-ink/60">Event not found.</p>
+        {loadError && <p className="mt-2 text-sm text-danger">{loadError}</p>}
+      </div>
+    );
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const registrationOpen = now <= event.registration_deadline;
@@ -317,10 +409,11 @@ function EventDetail() {
             {event.options.map((option, index) => (
               <label
                 key={index}
-                className={`block cursor-pointer rounded-lg border p-3 transition ${selectedOption === index
+                className={`block cursor-pointer rounded-lg border p-3 transition ${
+                  selectedOption === index
                     ? "border-primary bg-primary/5"
                     : "border-border hover:border-primary/40"
-                  }`}
+                }`}
               >
                 <div className="flex items-center gap-3">
                   <input
@@ -370,10 +463,11 @@ function EventDetail() {
             {event.options.map((option, index) => (
               <label
                 key={index}
-                className={`block cursor-pointer rounded-lg border p-3 transition ${selectedOption === index
+                className={`block cursor-pointer rounded-lg border p-3 transition ${
+                  selectedOption === index
                     ? "border-primary bg-primary/5"
                     : "border-border hover:border-primary/40"
-                  }`}
+                }`}
               >
                 <div className="flex items-center gap-3">
                   <input
@@ -421,7 +515,7 @@ function EventDetail() {
         <div className={cardClass}>
           <h2 className="mb-2 text-lg font-bold text-ink">Results</h2>
           <p className="mb-4 text-sm text-ink/60">
-            Voting has closed. Results haven't been revealed yet.
+            Voting has closed. Results haven&apos;t been revealed yet.
           </p>
           <button type="button" onClick={handleRevealResults} className={primaryBtn}>
             Reveal Results (creator only)
@@ -434,24 +528,32 @@ function EventDetail() {
         <div className={cardClass}>
           <h2 className="mb-4 text-lg font-bold text-ink">Results</h2>
 
+          {resultsError && (
+            <p className="mb-4 rounded-lg bg-danger/10 px-4 py-3 text-sm text-danger">
+              {resultsError}
+            </p>
+          )}
+
           {verifyData && (
             <div
-              className={`mb-5 flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-semibold ${verifyData.verified
+              className={`mb-5 flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-semibold ${
+                verifyData.verified
                   ? "bg-primary/10 text-primary"
                   : "bg-danger/10 text-danger"
-                }`}
+              }`}
             >
               <span>{verifyData.verified ? "✓" : "✗"}</span>
               {verifyData.verified
                 ? "Verified — independently recomputed and matches on-chain"
-                : "Not verified — recomputed result does not match on-chain"}
+                : verifyData.reason ||
+                  "Not verified — recomputed result does not match on-chain"}
             </div>
           )}
 
           {results && (
             <div className="space-y-3">
               {event.options.map((option, index) => {
-                const votes = results[index] ?? 0;
+                const votes = results[index] ?? results[String(index)] ?? 0;
                 const pct = totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0;
                 return (
                   <div key={index}>
@@ -473,14 +575,18 @@ function EventDetail() {
             </div>
           )}
 
-          {verifyData && (
+          {!results && !resultsError && (
+            <p className="text-sm text-ink/60">Loading results...</p>
+          )}
+
+          {verifyData && (verifyData.computed_hash || verifyData.onchain_hash) && (
             <details className="mt-5">
               <summary className="cursor-pointer text-sm font-semibold text-primary">
                 Verification details
               </summary>
               <div className="mt-2 space-y-1 rounded-lg bg-surface-muted p-3 font-mono text-xs text-ink/70">
-                <p>Computed: {verifyData.computed_hash}</p>
-                <p>On-chain: {verifyData.onchain_hash}</p>
+                <p>Computed: {verifyData.computed_hash || "—"}</p>
+                <p>On-chain: {verifyData.onchain_hash || "—"}</p>
               </div>
             </details>
           )}
