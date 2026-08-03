@@ -14,6 +14,20 @@ const inputClass =
   "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30";
 const labelClass = "mb-1 block text-sm font-semibold text-ink";
 
+const parsePositiveInteger = (value: string | number, fallback = 0) => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  }
+
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return fallback;
+  }
+
+  const parsed = Number(trimmed);
+  return parsed > 0 ? Math.floor(parsed) : fallback;
+};
+
 function CreateEvent() {
   const navigate = useNavigate();
   const { isConnected, address } = useAccount();
@@ -22,9 +36,9 @@ function CreateEvent() {
 
   const [topic, setTopic] = useState("");
   const [options, setOptions] = useState(["", ""]);
-  const [registrationMinutes, setRegistrationMinutes] = useState(30);
-  const [votingMinutes, setVotingMinutes] = useState(60);
-  const [depositAmount, setDepositAmount] = useState(1000);
+  const [registrationMinutes, setRegistrationMinutes] = useState("30");
+  const [votingMinutes, setVotingMinutes] = useState("60");
+  const [depositAmount, setDepositAmount] = useState("1000");
   const [status, setStatus] = useState("");
   const [registrationMode, setRegistrationMode] = useState<RegistrationMode>("open");
   const [eligibleVotersText, setEligibleVotersText] = useState("");
@@ -99,12 +113,26 @@ function CreateEvent() {
       return;
     }
 
-    if (registrationMinutes < 1) {
+    const parsedRegistrationMinutes = parsePositiveInteger(registrationMinutes);
+    const parsedVotingMinutes = parsePositiveInteger(votingMinutes);
+    const parsedDepositAmount = parsePositiveInteger(depositAmount);
+
+    if (parsedRegistrationMinutes < 1) {
       setStatus("Registration window must be at least 1 minute.");
       return;
     }
 
-    if (registrationMode === "credential" && registrationMinutes < 5) {
+    if (parsedVotingMinutes < 1) {
+      setStatus("Voting window must be at least 1 minute.");
+      return;
+    }
+
+    if (parsedDepositAmount < 1) {
+      setStatus("Deposit amount must be at least 1000 DVY.");
+      return;
+    }
+
+    if (registrationMode === "credential" && parsedRegistrationMinutes < 5) {
       setStatus(
         "Credential mode needs at least 5 minutes — the system has to register every voter on-chain automatically before the window closes.",
       );
@@ -112,10 +140,10 @@ function CreateEvent() {
     }
 
     try {
-      const depositAmountWei = parseUnits(depositAmount.toString(), 18);
+      const depositAmountWei = parseUnits(parsedDepositAmount.toString(), 18);
       const now = Math.floor(Date.now() / 1000);
-      const registrationDeadline = BigInt(now + registrationMinutes * 60);
-      const votingDeadline = BigInt(now + (registrationMinutes + votingMinutes) * 60);
+      const registrationDeadline = BigInt(now + parsedRegistrationMinutes * 60);
+      const votingDeadline = BigInt(now + (parsedRegistrationMinutes + parsedVotingMinutes) * 60);
 
       setStatus("Approving deposit...");
       const approveHash = await writeContractAsync({
@@ -285,9 +313,10 @@ function CreateEvent() {
             <label className={labelClass}>Registration window (minutes)</label>
             <input
               type="number"
+              min="1"
               className={inputClass}
               value={registrationMinutes}
-              onChange={(e) => setRegistrationMinutes(Number(e.target.value))}
+              onChange={(e) => setRegistrationMinutes(e.target.value)}
             />
             {registrationMode === "credential" && (
               <p className="mt-1 text-xs text-ink/50">
@@ -300,9 +329,10 @@ function CreateEvent() {
             <label className={labelClass}>Voting window (minutes after)</label>
             <input
               type="number"
+              min="1"
               className={inputClass}
               value={votingMinutes}
-              onChange={(e) => setVotingMinutes(Number(e.target.value))}
+              onChange={(e) => setVotingMinutes(e.target.value)}
             />
           </div>
         </div>
@@ -311,9 +341,10 @@ function CreateEvent() {
           <label className={labelClass}>Deposit amount (DVY)</label>
           <input
             type="number"
+            min="1"
             className={inputClass}
             value={depositAmount}
-            onChange={(e) => setDepositAmount(Number(e.target.value))}
+            onChange={(e) => setDepositAmount(e.target.value)}
           />
         </div>
 
@@ -324,8 +355,8 @@ function CreateEvent() {
               <label
                 key={opt.value}
                 className={`block cursor-pointer rounded-lg border p-3 transition ${registrationMode === opt.value
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/40"
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:border-primary/40"
                   }`}
               >
                 <div className="flex items-start gap-3">

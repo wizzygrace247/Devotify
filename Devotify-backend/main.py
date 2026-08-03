@@ -294,6 +294,63 @@ def verify_event_results(event_id: int) -> dict:
     }
 
 
+class VerifyResultsRequest(BaseModel):
+    results_hash: str
+
+
+@app.post("/verify-results")
+def verify_results_by_hash(body: VerifyResultsRequest) -> dict:
+    candidate_hash = body.results_hash.strip()
+    if not candidate_hash:
+        raise HTTPException(status_code=400, detail="results_hash is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT event_id, results_hash FROM results_revealed WHERE LOWER(results_hash) = LOWER(?)",
+            (candidate_hash,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No revealed election found for that hash")
+
+        event_id = row["event_id"]
+        onchain_hash = row["results_hash"]
+
+        cursor.execute(
+            "SELECT option_index, COUNT(*) as vote_count FROM votes WHERE event_id = ? GROUP BY option_index",
+            (event_id,),
+        )
+        vote_rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    options = get_event_options(event_id)
+    tally = [0] * len(options)
+    for r in vote_rows:
+        tally[r["option_index"]] = r["vote_count"]
+
+    encoded = encode(["uint256[]"], [tally])
+    computed_hash = Web3.keccak(encoded).hex()
+    verified = normalize_hash(computed_hash) == normalize_hash(onchain_hash)
+
+    creator, topic, registration_deadline, voting_deadline, deposit_amount, results_revealed = (
+        contract.functions.events(event_id).call()
+    )
+
+    return {
+        "event_id": event_id,
+        "topic": topic,
+        "options": options,
+        "results": {str(index): tally[index] for index in range(len(tally))},
+        "verified": verified,
+        "computed_hash": computed_hash,
+        "onchain_hash": onchain_hash,
+        "reason": "Verified — independently recomputed and matches on-chain" if verified else "Not verified — recomputed result does not match on-chain",
+    }
+
+
 # --- Eligibility system ---
 
 class EligibleVotersRequest(BaseModel):

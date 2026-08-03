@@ -97,12 +97,20 @@ function Dashboard() {
     <div>
       <div className="mb-8 flex items-center justify-between">
         <h1 className="text-2xl font-extrabold text-ink">Elections</h1>
-        <Link
-          to="/create"
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-bright"
-        >
-          + Create Election
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            to="/verify"
+            className="rounded-lg border border-primary px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/5"
+          >
+            Verify results
+          </Link>
+          <Link
+            to="/create"
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-bright"
+          >
+            + Create Election
+          </Link>
+        </div>
       </div>
 
       {error && (
