@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from relayer import register_voter_by_id, vote_by_id
-from fastapi import FastAPI, HTTPException, Depends, Header
+
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -103,6 +103,12 @@ def get_or_create_event_salt(event_id: int) -> str:
         return salt
     finally:
         conn.close()
+
+
+def voter_id_to_bytes(voter_id_hex: str) -> bytes:
+    if not voter_id_hex:
+        raise ValueError("voter_id is required")
+    return bytes.fromhex(voter_id_hex[2:] if voter_id_hex.startswith(("0x", "0X")) else voter_id_hex)
 
 
 # --- Table setup ---
@@ -406,9 +412,7 @@ def register_by_id(event_id: int, body: RegisterByIdRequest) -> dict:
     finally:
         conn.close()
 
-    voter_id_bytes = bytes.fromhex(
-        voter_id_hex[2:] if voter_id_hex.startswith("0x") else voter_id_hex
-    )
+    voter_id_bytes = voter_id_to_bytes(voter_id_hex)
     try:
         result = register_voter_by_id(event_id, voter_id_bytes)
     except Exception as e:
@@ -456,9 +460,7 @@ def submit_vote_by_id(event_id: int, body: VoteByIdRequest) -> dict:
     finally:
         conn.close()
 
-    voter_id_bytes = bytes.fromhex(
-        voter_id_hex[2:] if voter_id_hex.startswith("0x") else voter_id_hex
-    )
+    voter_id_bytes = voter_id_to_bytes(voter_id_hex)
 
     try:
         result = vote_by_id(event_id, body.option_index, voter_id_bytes)
@@ -536,9 +538,7 @@ def add_credential_voters(event_id: int, body: CredentialVotersRequest) -> dict:
     registration_results = []
     for item in newly_added_voter_ids:
         voter_id_hex = item["voter_id"]
-        voter_id_bytes = bytes.fromhex(
-            voter_id_hex[2:] if voter_id_hex.startswith("0x") else voter_id_hex
-        )
+        voter_id_bytes = voter_id_to_bytes(voter_id_hex)
 
         try:
             result = register_voter_by_id(event_id, voter_id_bytes)
@@ -572,6 +572,89 @@ def add_credential_voters(event_id: int, body: CredentialVotersRequest) -> dict:
         "onchain_registered": onchain_registered,
         "registration_results": registration_results,
     }
+
+
+class AuthenticateAndVoteRequest(BaseModel):
+    identity_key: str
+    password: str
+    option_index: int
+
+
+@app.post("/events/{event_id}/authenticate-and-vote")
+def authenticate_and_vote(event_id: int, body: AuthenticateAndVoteRequest) -> dict:
+    identity_key = body.identity_key.strip()
+    if not identity_key:
+        raise HTTPException(status_code=400, detail="identity_key is required")
+    if not body.password:
+        raise HTTPException(status_code=400, detail="password is required")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT voter_id, password_hash, used FROM credential_voters WHERE event_id = ? AND identity_key = ?",
+            (event_id, identity_key),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Not eligible for this event")
+        if row["used"]:
+            raise HTTPException(status_code=409, detail="This credential has already been used")
+
+        if not bcrypt.checkpw(body.password.encode(), row["password_hash"].encode()):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        voter_id_hex = row["voter_id"]
+    finally:
+        conn.close()
+
+    voter_id_bytes = voter_id_to_bytes(voter_id_hex)
+
+    try:
+        is_registered = contract.functions.isRegistered(event_id, voter_id_bytes).call()
+    except Exception:
+        is_registered = False
+
+    if not is_registered:
+        try:
+            registration_result = register_voter_by_id(event_id, voter_id_bytes)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"On-chain registration failed: {str(e)}",
+            )
+    else:
+        registration_result = None
+
+    try:
+        vote_result = vote_by_id(event_id, body.option_index, voter_id_bytes)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"On-chain vote failed: {str(e)}",
+        )
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE credential_voters SET used = 1 WHERE event_id = ? AND identity_key = ?",
+            (event_id, identity_key),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = {
+        "status": "voted",
+        "event_id": event_id,
+        "option_index": body.option_index,
+        "tx_hash": vote_result["tx_hash"],
+    }
+    if registration_result is not None:
+        response["registration_tx_hash"] = registration_result.get("tx_hash")
+    return response
+
 
 @app.get("/events/{event_id}/registration-mode")
 def get_registration_mode(event_id: int) -> dict:
