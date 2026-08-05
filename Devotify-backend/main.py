@@ -6,6 +6,9 @@ from pathlib import Path
 import time
 from indexer_task import start_indexer_thread
 import bcrypt
+import requests
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 from dotenv import load_dotenv
 from web3 import Web3
 from eth_abi import encode
@@ -26,7 +29,22 @@ RPC_URL = os.getenv("SEPOLIA_RPC_URL")
 CONTRACT_ADDRESS = os.getenv("DEVOTIFY_VOTING_ADDRESS")
 API_KEY = os.getenv("API_KEY")
 
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
+# Session with retry/backoff so transient Alchemy/network blips don't
+# take down the whole backend with a raw ConnectTimeout.
+_session = requests.Session()
+_retries = Retry(
+    total=3,
+    backoff_factor=0.5,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["POST"],
+)
+_session.mount("https://", HTTPAdapter(max_retries=_retries))
+
+w3 = Web3(Web3.HTTPProvider(
+    RPC_URL,
+    session=_session,
+    request_kwargs={"timeout": 15},
+))
 
 with open(ABI_PATH) as f:
     abi_data = json.load(f)
