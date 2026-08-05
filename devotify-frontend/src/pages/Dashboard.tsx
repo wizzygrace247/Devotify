@@ -38,7 +38,7 @@ function EventCard({ event }: { event: VotingEvent }) {
   return (
     <Link
       to={`/events/${event.event_id}`}
-      className="rounded-xl border border-border bg-surface p-5 shadow-sm transition hover:border-primary/40 hover:shadow-md"
+      className="mx-auto max-w-md rounded-xl border border-border bg-surface p-5 shadow-sm transition hover:border-primary/40 hover:shadow-md"
     >
       <span
         className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${status.className}`}
@@ -99,14 +99,8 @@ function Dashboard() {
         <h1 className="text-2xl font-extrabold text-ink">Elections</h1>
         <div className="flex items-center gap-3">
           <Link
-            to="/verify"
-            className="rounded-lg border border-primary px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/5"
-          >
-            Verify results
-          </Link>
-          <Link
             to="/create"
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-bright"
+            className="rounded-lg bg-primary px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-primary-bright"
           >
             + Create Election
           </Link>
