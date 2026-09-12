@@ -1,12 +1,13 @@
 import os
 import json
-import sqlite3
 import secrets
 from pathlib import Path
 import time
 from indexer_task import start_indexer_thread
 import bcrypt
 import requests
+import psycopg2
+import psycopg2.extras
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 from dotenv import load_dotenv
@@ -20,9 +21,13 @@ from relayer import register_voter_by_id, vote_by_id
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR))
-DB_PATH = DATA_DIR / "devotify.db"
 ABI_PATH = BASE_DIR / "devotify_voting_abi.json"
+
+# --- Persistent storage: Postgres (e.g. Supabase), not local SQLite ---
+# A local SQLite file lives on the container's disk, which Render/Railway
+# wipe on every redeploy or restart. DATABASE_URL points at a real Postgres
+# instance so registrations/votes/results survive deploys.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # --- Set up the chain connection and contract ONCE, at startup ---
 RPC_URL = os.getenv("SEPOLIA_RPC_URL")
@@ -78,9 +83,8 @@ def require_api_key(x_api_key: str | None = Header(default=None)):
 
 # --- Shared helpers ---
 
-def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+def get_db_connection():
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
 
 
@@ -108,13 +112,13 @@ def get_or_create_event_salt(event_id: int) -> str:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT salt FROM event_salts WHERE event_id = ?", (event_id,))
+        cursor.execute("SELECT salt FROM event_salts WHERE event_id = %s", (event_id,))
         row = cursor.fetchone()
         if row:
             return row["salt"]
         salt = secrets.token_hex(16)
         cursor.execute(
-            "INSERT INTO event_salts (event_id, salt) VALUES (?, ?)",
+            "INSERT INTO event_salts (event_id, salt) VALUES (%s, %s)",
             (event_id, salt),
         )
         conn.commit()
@@ -230,13 +234,13 @@ def get_event_details(event_id: int) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT COUNT(*) as count FROM voter_registrations WHERE event_id = ?",
+            "SELECT COUNT(*) as count FROM voter_registrations WHERE event_id = %s",
             (event_id,),
         )
         registration_count = cursor.fetchone()["count"]
 
         cursor.execute(
-            "SELECT COUNT(*) as count FROM votes WHERE event_id = ?",
+            "SELECT COUNT(*) as count FROM votes WHERE event_id = %s",
             (event_id,),
         )
         vote_count = cursor.fetchone()["count"]
@@ -263,7 +267,7 @@ def get_event_results(event_id: int) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT option_index, COUNT(*) as vote_count FROM votes WHERE event_id = ? GROUP BY option_index",
+            "SELECT option_index, COUNT(*) as vote_count FROM votes WHERE event_id = %s GROUP BY option_index",
             (event_id,),
         )
         rows = cursor.fetchall()
@@ -280,7 +284,7 @@ def verify_event_results(event_id: int) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT results_hash FROM results_revealed WHERE event_id = ?",
+            "SELECT results_hash FROM results_revealed WHERE event_id = %s",
             (event_id,),
         )
         row = cursor.fetchone()
@@ -293,7 +297,7 @@ def verify_event_results(event_id: int) -> dict:
         onchain_hash = row["results_hash"]
 
         cursor.execute(
-            "SELECT option_index, COUNT(*) as vote_count FROM votes WHERE event_id = ? GROUP BY option_index",
+            "SELECT option_index, COUNT(*) as vote_count FROM votes WHERE event_id = %s GROUP BY option_index",
             (event_id,),
         )
         vote_rows = cursor.fetchall()
@@ -332,7 +336,7 @@ def verify_results_by_hash(body: VerifyResultsRequest) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT event_id, results_hash FROM results_revealed WHERE LOWER(results_hash) = LOWER(?)",
+            "SELECT event_id, results_hash FROM results_revealed WHERE LOWER(results_hash) = LOWER(%s)",
             (candidate_hash,),
         )
         row = cursor.fetchone()
@@ -343,7 +347,7 @@ def verify_results_by_hash(body: VerifyResultsRequest) -> dict:
         onchain_hash = row["results_hash"]
 
         cursor.execute(
-            "SELECT option_index, COUNT(*) as vote_count FROM votes WHERE event_id = ? GROUP BY option_index",
+            "SELECT option_index, COUNT(*) as vote_count FROM votes WHERE event_id = %s GROUP BY option_index",
             (event_id,),
         )
         vote_rows = cursor.fetchall()
@@ -394,7 +398,11 @@ def add_eligible_voters(event_id: int, body: EligibleVotersRequest) -> dict:
         for identity_key in body.identity_keys:
             voter_id_hex = Web3.keccak(text=f"{identity_key}:{salt}").hex()
             cursor.execute(
-                "INSERT OR IGNORE INTO eligible_voters (event_id, identity_key, voter_id, used) VALUES (?, ?, ?, 0)",
+                """
+                INSERT INTO eligible_voters (event_id, identity_key, voter_id, used)
+                VALUES (%s, %s, %s, 0)
+                ON CONFLICT (event_id, identity_key) DO NOTHING
+                """,
                 (event_id, identity_key, voter_id_hex),
             )
             added += cursor.rowcount
@@ -418,7 +426,7 @@ def register_by_id(event_id: int, body: RegisterByIdRequest) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT voter_id, used FROM eligible_voters WHERE event_id = ? AND identity_key = ?",
+            "SELECT voter_id, used FROM eligible_voters WHERE event_id = %s AND identity_key = %s",
             (event_id, body.identity_key),
         )
         row = cursor.fetchone()
@@ -443,7 +451,7 @@ def register_by_id(event_id: int, body: RegisterByIdRequest) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE eligible_voters SET used = 1 WHERE event_id = ? AND identity_key = ?",
+            "UPDATE eligible_voters SET used = 1 WHERE event_id = %s AND identity_key = %s",
             (event_id, body.identity_key),
         )
         conn.commit()
@@ -468,7 +476,7 @@ def submit_vote_by_id(event_id: int, body: VoteByIdRequest) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT voter_id FROM eligible_voters WHERE event_id = ? AND identity_key = ?",
+            "SELECT voter_id FROM eligible_voters WHERE event_id = %s AND identity_key = %s",
             (event_id, body.identity_key),
         )
         row = cursor.fetchone()
@@ -532,9 +540,10 @@ def add_credential_voters(event_id: int, body: CredentialVotersRequest) -> dict:
 
             cursor.execute(
                 """
-                INSERT OR IGNORE INTO credential_voters
+                INSERT INTO credential_voters
                 (event_id, identity_key, password_hash, voter_id, used)
-                VALUES (?, ?, ?, ?, 0)
+                VALUES (%s, %s, %s, %s, 0)
+                ON CONFLICT (event_id, identity_key) DO NOTHING
                 """,
                 (event_id, identity_key, password_hash, voter_id_hex),
             )
@@ -610,7 +619,7 @@ def authenticate_and_vote(event_id: int, body: AuthenticateAndVoteRequest) -> di
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT voter_id, password_hash, used FROM credential_voters WHERE event_id = ? AND identity_key = ?",
+            "SELECT voter_id, password_hash, used FROM credential_voters WHERE event_id = %s AND identity_key = %s",
             (event_id, identity_key),
         )
         row = cursor.fetchone()
@@ -656,7 +665,7 @@ def authenticate_and_vote(event_id: int, body: AuthenticateAndVoteRequest) -> di
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE credential_voters SET used = 1 WHERE event_id = ? AND identity_key = ?",
+            "UPDATE credential_voters SET used = 1 WHERE event_id = %s AND identity_key = %s",
             (event_id, identity_key),
         )
         conn.commit()
@@ -680,13 +689,13 @@ def get_registration_mode(event_id: int) -> dict:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT COUNT(*) as count FROM credential_voters WHERE event_id = ?",
+            "SELECT COUNT(*) as count FROM credential_voters WHERE event_id = %s",
             (event_id,),
         )
         has_credentials = cursor.fetchone()["count"] > 0
 
         cursor.execute(
-            "SELECT COUNT(*) as count FROM eligible_voters WHERE event_id = ?",
+            "SELECT COUNT(*) as count FROM eligible_voters WHERE event_id = %s",
             (event_id,),
         )
         has_eligible = cursor.fetchone()["count"] > 0
